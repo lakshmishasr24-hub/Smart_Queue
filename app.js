@@ -78,9 +78,20 @@ function setupRealtimeSubscription() {
             await fetchInitialData();
             renderView();
 
-            if (payload.eventType === 'UPDATE' && payload.new.status === 'called' && payload.new.id === state.activeCustomerId) {
-                announceTicket(payload.new.ticket_number, payload.new.name);
-                sendNotification(payload.new);
+            if (payload.eventType === 'UPDATE' && payload.new.status === 'called') {
+                const isMyTurn = payload.new.id === state.activeCustomerId;
+                const isStaff = isAuthenticated();
+                const isKiosk = state.view === 'kiosk';
+
+                // Announce for Staff, Kiosk, or the specific Customer
+                if (isMyTurn || isStaff || isKiosk) {
+                    announceTicket(payload.new.ticket_number, payload.new.name);
+                }
+
+                // Only send desktop notification to the specific Customer
+                if (isMyTurn) {
+                    sendNotification(payload.new);
+                }
             }
         })
         .subscribe();
@@ -402,6 +413,9 @@ function generateKioskQR() {
 
 function announceTicket(number, name) {
     if ('speechSynthesis' in window) {
+        // Cancel any ongoing speech to avoid stacking or delays
+        window.speechSynthesis.cancel();
+
         const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}, please proceed to the counter.`);
         msg.rate = 0.9;
         window.speechSynthesis.speak(msg);
