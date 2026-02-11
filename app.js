@@ -2,9 +2,14 @@
 const SUPABASE_URL = 'https://klpalrdvinfmvlsopapa.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtscGFscmR2aW5mbXZsc29wYXBhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3Nzk3NDEsImV4cCI6MjA4NjM1NTc0MX0.pMg4DnATZ0290feV2pN_TPYmhnp4Xc5-qB3aVQpY9N0';
 
-let supabase;
+let supabaseClient;
 try {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // The library defines a global 'supabase' object with a 'createClient' method
+    if (window.supabase && window.supabase.createClient) {
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } else {
+        console.error("Supabase library not found on window object.");
+    }
 } catch (e) {
     console.error("Supabase fail to initialize:", e);
 }
@@ -50,9 +55,9 @@ function setView(viewName) {
 
 // --- Supabase Data Logic ---
 async function fetchInitialData() {
-    if (!supabase) return;
+    if (!supabaseClient) return;
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('queue')
             .select('*')
             .order('joined_at', { ascending: true });
@@ -65,8 +70,8 @@ async function fetchInitialData() {
 }
 
 function setupRealtimeSubscription() {
-    if (!supabase) return;
-    supabase
+    if (!supabaseClient) return;
+    supabaseClient
         .channel('public:queue')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'queue' }, async (payload) => {
             console.log('Realtime update:', payload);
@@ -153,12 +158,12 @@ function attachEventListeners() {
 
             const lastTicket = state.queue.reduce((max, item) => Math.max(max, item.ticket_number || 100), 100);
 
-            if (!supabase) {
-                alert("Database disconnected. Check console.");
+            if (!supabaseClient) {
+                alert("Database disconnected. Check connection.");
                 return;
             }
 
-            const { data, error } = await supabase
+            const { data, error } = await supabaseClient
                 .from('queue')
                 .insert([{
                     name,
@@ -362,22 +367,22 @@ function renderStaffView() {
 
 // --- Actions (Global exposure) ---
 window.callNext = async () => {
-    if (!supabase) return;
+    if (!supabaseClient) return;
     const next = state.queue.find(c => c.status === 'waiting');
     if (next) {
-        await supabase.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('status', 'called');
-        await supabase.from('queue').update({ status: 'called', called_at: new Date().toISOString() }).eq('id', next.id);
+        await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('status', 'called');
+        await supabaseClient.from('queue').update({ status: 'called', called_at: new Date().toISOString() }).eq('id', next.id);
     }
 };
 
 window.completeCustomer = async (id) => {
-    if (!supabase) return;
-    await supabase.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', id);
+    if (!supabaseClient) return;
+    await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', id);
 };
 
 window.cancelTicket = async (id) => {
-    if (!supabase) return;
-    await supabase.from('queue').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', id);
+    if (!supabaseClient) return;
+    await supabaseClient.from('queue').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', id);
     if (state.activeCustomerId === id) {
         state.activeCustomerId = null;
         localStorage.removeItem('vanilla_active_id');
