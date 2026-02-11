@@ -18,7 +18,8 @@ try {
 let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
-    view: 'join' // join, status, staff, login, kiosk
+    view: 'join', // join, status, staff, login, kiosk
+    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer'
 };
 
 // --- Auth Management ---
@@ -231,8 +232,12 @@ function renderView() {
     };
 
     if (navItems.back) navItems.back.classList.toggle('hidden', state.view === 'join' || state.view === 'kiosk');
-    if (navItems.staff) navItems.staff.classList.toggle('hidden', state.view === 'staff' || state.view === 'login');
-    if (navItems.kiosk) navItems.kiosk.classList.toggle('hidden', state.view === 'kiosk');
+
+    // Management buttons visibility
+    const showManagement = !state.isCustomerMode && (state.view !== 'staff' && state.view !== 'login');
+    if (navItems.staff) navItems.staff.classList.toggle('hidden', !showManagement);
+    if (navItems.kiosk) navItems.kiosk.classList.toggle('hidden', !showManagement || state.view === 'kiosk');
+
     if (navItems.logout) navItems.logout.classList.toggle('hidden', !isAuthenticated() || state.view === 'kiosk' || state.view === 'login');
 
     if (state.view === 'status') renderStatusView();
@@ -408,7 +413,20 @@ function generateKioskQR() {
     const qrContainer = document.getElementById('kiosk-qr-code');
     if (!qrContainer) return;
     qrContainer.innerHTML = '';
-    new QRCode(qrContainer, { text: window.location.origin + window.location.pathname, width: 300, height: 300, colorDark: "#0f172a", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.H });
+
+    // Append mode=customer to the QR code URL so scanned devices hide staff buttons
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', 'customer');
+    url.searchParams.delete('view'); // Start at join view
+
+    new QRCode(qrContainer, {
+        text: url.toString(),
+        width: 300,
+        height: 300,
+        colorDark: "#0f172a",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.H
+    });
 }
 
 function announceTicket(number, name) {
