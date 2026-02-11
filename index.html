@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Queue | Vanilla Edition</title>
+    <link rel="stylesheet" href="style.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&display=swap"
+        rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+
+<body>
+    <nav id="main-nav">
+        <div class="nav-content">
+            <div id="logo-btn" class="logo">
+                <i data-lucide="users" class="logo-icon"></i>
+                <span class="logo-text">Smart<span>Queue</span></span>
+            </div>
+            <div class="nav-actions">
+                <button id="back-btn" class="btn-text hidden">
+                    <i data-lucide="chevron-left"></i> Back
+                </button>
+                <button id="kiosk-btn" class="btn-secondary">
+                    <i data-lucide="qr-code"></i> Kiosk Mode
+                </button>
+                <button id="staff-portal-btn" class="btn-secondary">
+                    <i data-lucide="shield-check"></i> Staff Portal
+                </button>
+                <button id="logout-btn" class="btn-text hidden">
+                    <i data-lucide="log-out"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main id="app-root">
+        <!-- Join View -->
+        <section id="join-view" class="view active">
+            <div class="glass-card main-card animate-fade-in">
+                <div class="header-section">
+                    <div class="icon-blob">
+                        <i data-lucide="sparkles" size="32"></i>
+                    </div>
+                    <h1 class="title">Welcome</h1>
+                    <p class="subtitle">Join the smart queue to save your spot</p>
+                </div>
+                <form id="join-form" class="form-stack">
+                    <div class="input-group">
+                        <label>Your Name</label>
+                        <input type="text" id="customer-name" placeholder="e.g. John Doe" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Select Service</label>
+                        <div class="service-grid">
+                            <button type="button" class="service-opt active" data-service="General Inquiry">General
+                                Inquiry</button>
+                            <button type="button" class="service-opt" data-service="Technical Support">Technical
+                                Support</button>
+                            <button type="button" class="service-opt" data-service="Billing">Billing</button>
+                            <button type="button" class="service-opt" data-service="VIP Concierge">VIP
+                                Concierge</button>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        Get My Ticket <i data-lucide="chevron-right"></i>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Login View -->
+        <section id="login-view" class="view">
+            <div class="glass-card main-card animate-fade-in" style="max-width: 400px; margin: 0 auto;">
+                <div class="header-section">
+                    <div class="icon-blob" style="--color: var(--primary)">
+                        <i data-lucide="lock" size="32"></i>
+                    </div>
+                    <h1 class="title-small">Staff Login</h1>
+                    <p class="subtitle">Enter password to access portal</p>
+                </div>
+                <form id="login-form" class="form-stack">
+                    <div class="input-group">
+                        <label>Password</label>
+                        <input type="password" id="staff-password" placeholder="••••••••" required>
+                        <p id="login-error" class="error-text hidden">Incorrect password. Please try again.</p>
+                    </div>
+                    <button type="submit" class="btn-primary" style="justify-content: center;">
+                        Unlock <i data-lucide="unlock"></i>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Kiosk View -->
+        <section id="kiosk-view" class="view">
+            <div class="kiosk-layout animate-fade-in">
+                <div class="kiosk-header">
+                    <i data-lucide="users" class="logo-icon" style="transform: scale(1.5);"></i>
+                    <h1 class="title">Smart Queue</h1>
+                    <p class="subtitle" style="font-size: 1.25rem;">Scan to Join the Queue from your Phone</p>
+                </div>
+                <div class="glass-card kiosk-qr-card">
+                    <div id="kiosk-qr-code"></div>
+                </div>
+                <div class="kiosk-footer">
+                    <p>No app download required</p>
+                    <button id="exit-kiosk-btn" class="btn-text" style="margin-top: 2rem;">
+                        <i data-lucide="x"></i> Exit Kiosk Mode
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Status View -->
+        <section id="status-view" class="view">
+            <div id="status-card-container"></div>
+        </section>
+
+        <!-- Staff View -->
+        <section id="staff-view" class="view">
+            <div class="staff-layout">
+                <div class="staff-header">
+                    <div>
+                        <h1 class="title-small">Staff Terminal</h1>
+                        <p class="subtitle">Manage customer flow efficiently</p>
+                    </div>
+                    <button id="call-next-btn" class="btn-primary">
+                        <i data-lucide="user-plus"></i> Call Next Customer
+                    </button>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="glass-card stat-item">
+                        <div class="stat-icon-wrap" style="--color: var(--primary)">
+                            <i data-lucide="users"></i>
+                        </div>
+                        <div class="stat-info">
+                            <label>In Queue</label>
+                            <h2 id="stat-waiting">0</h2>
+                        </div>
+                    </div>
+                    <div class="glass-card stat-item">
+                        <div class="stat-icon-wrap" style="--color: var(--secondary)">
+                            <i data-lucide="clock"></i>
+                        </div>
+                        <div class="stat-info">
+                            <label>Avg Wait</label>
+                            <h2 id="stat-avg">15m</h2>
+                        </div>
+                    </div>
+                    <div class="glass-card stat-item">
+                        <div class="stat-icon-wrap" style="--color: var(--success)">
+                            <i data-lucide="check-circle"></i>
+                        </div>
+                        <div class="stat-info">
+                            <label>Served</label>
+                            <h2 id="stat-served">0</h2>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="main-staff-grid">
+                    <div class="queue-list-section">
+                        <h3 class="section-label"><i data-lucide="bar-chart-3"></i> Waiting Queue</h3>
+                        <div id="queue-list" class="queue-list"></div>
+                    </div>
+                    <div class="serving-section">
+                        <h3 class="section-label">Currently Serving</h3>
+                        <div id="now-serving-container"></div>
+                    </div>
+                </div>
+
+                <div class="history-section" style="margin-top: 3rem;">
+                    <h3 class="section-label"><i data-lucide="history"></i> Ticket History</h3>
+                    <div id="history-list" class="queue-list history-list"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="main-footer">
+        &copy; 2026 Smart Queue Management System. Built with &hearts; for efficiency.
+    </footer>
+
+    <script src="app.js"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+
+</html>
