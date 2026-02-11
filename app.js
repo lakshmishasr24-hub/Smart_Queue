@@ -1,16 +1,16 @@
+// --- Supabase Configuration ---
+// TO USER: Replace these with your actual Supabase URL and Anon Key
+const SUPABASE_URL = 'https://klpalrdvinfmvlsopapa.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtscGFscmR2aW5mbXZsc29wYXBhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3Nzk3NDEsImV4cCI6MjA4NjM1NTc0MX0.pMg4DnATZ0290feV2pN_TPYmhnp4Xc5-qB3aVQpY9N0';
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 // --- State Management ---
 let state = {
-    queue: JSON.parse(localStorage.getItem('vanilla_queue')) || [],
-    ticketCounter: parseInt(localStorage.getItem('vanilla_counter')) || 100,
+    queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
     view: 'join' // join, status, staff, login, kiosk
 };
-
-function saveState() {
-    localStorage.setItem('vanilla_queue', JSON.stringify(state.queue));
-    localStorage.setItem('vanilla_counter', state.ticketCounter.toString());
-    localStorage.setItem('vanilla_active_id', state.activeCustomerId || '');
-}
 
 // --- Auth Management ---
 function isAuthenticated() {
@@ -46,27 +46,48 @@ const servingContainer = document.getElementById('now-serving-container');
 const callNextBtn = document.getElementById('call-next-btn');
 
 // --- Initialization ---
-function init() {
+async function init() {
+    await fetchInitialData();
+    setupRealtimeSubscription();
     renderView();
     requestNotificationPermission();
 
-    // Add periodic refresh to simulate "real-time" if multiple tabs are open
-    window.addEventListener('storage', (e) => {
-        if (e.key.startsWith('vanilla_')) {
-            const data = JSON.parse(localStorage.getItem('vanilla_queue')) || [];
-            state.queue = data;
-            state.ticketCounter = parseInt(localStorage.getItem('vanilla_counter')) || 100;
-            state.activeCustomerId = localStorage.getItem('vanilla_active_id') || null;
-            renderView();
-        }
-    });
-
-    // Start timer for "real-time" position updates if in status view
+    // Still use a timer for UI-only updates like relative time if needed
     setInterval(() => {
         if (state.view === 'status' || state.view === 'staff') {
             renderView();
         }
-    }, 10000);
+    }, 30000);
+}
+
+async function fetchInitialData() {
+    const { data, error } = await supabase
+        .from('queue')
+        .select('*')
+        .order('joined_at', { ascending: true });
+
+    if (error) {
+        console.error('Error fetching data:', error);
+    } else {
+        state.queue = data || [];
+    }
+}
+
+function setupRealtimeSubscription() {
+    supabase
+        .channel('public:queue')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'queue' }, async (payload) => {
+            console.log('Change received!', payload);
+            await fetchInitialData(); // Simpler than surgical updates for this scale
+            renderView();
+
+            // Handle notifications for the specific customer if they are called
+            if (payload.eventType === 'UPDATE' && payload.new.status === 'called' && payload.new.id === state.activeCustomerId) {
+                announceTicket(payload.new.ticket_number, payload.new.name);
+                sendNotification(payload.new);
+            }
+        })
+        .subscribe();
 }
 
 function formatDuration(ms) {
@@ -95,7 +116,6 @@ function setView(viewName) {
         state.view = viewName;
     }
 
-    // Exit kiosk mode class if moving away
     if (state.view !== 'kiosk') {
         document.body.classList.remove('kiosk-mode');
     } else {
@@ -134,12 +154,10 @@ loginForm.addEventListener('submit', (e) => {
 
 // --- View Rendering ---
 function renderView() {
-    // Toggle active view
     Object.keys(views).forEach(v => {
-        views[v].classList.toggle('active', state.view === v);
+        if (views[v]) views[v].classList.toggle('active', state.view === v);
     });
 
-    // Toggle nav buttons
     navElements.backBtn.classList.toggle('hidden', state.view === 'join' || state.view === 'kiosk');
     navElements.staffBtn.classList.toggle('hidden', state.view === 'staff' || state.view === 'login');
     navElements.kioskBtn.classList.toggle('hidden', state.view === 'kiosk');
@@ -148,40 +166,43 @@ function renderView() {
     if (state.view === 'status') renderStatusView();
     if (state.view === 'staff') renderStaffView();
 
-    // Refresh Lucide icons for dynamic content
     if (window.lucide) window.lucide.createIcons();
 }
 
 // --- Join Logic ---
-joinForm.addEventListener('submit', (e) => {
+joinForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('customer-name').value;
 
-    const newCustomer = {
-        id: Math.random().toString(36).substr(2, 9),
-        name,
-        service: selectedService,
-        joinedAt: Date.now(),
-        status: 'waiting',
-        ticketNumber: state.ticketCounter + 1
-    };
+    // Get highest ticket number from current queue
+    const lastTicket = state.queue.reduce((max, item) => Math.max(max, item.ticket_number || 100), 100);
 
-    state.queue.push(newCustomer);
-    state.ticketCounter++;
-    state.activeCustomerId = newCustomer.id;
-    state.view = 'status';
+    const { data, error } = await supabase
+        .from('queue')
+        .insert([{
+            name,
+            service: selectedService,
+            ticket_number: lastTicket + 1,
+            status: 'waiting',
+            joined_at: new Date().toISOString()
+        }])
+        .select();
 
-    saveState();
-    renderView();
+    if (error) {
+        console.error('Error joining queue:', error);
+        alert('Could not join queue. Please check connection.');
+    } else if (data && data[0]) {
+        state.activeCustomerId = data[0].id;
+        localStorage.setItem('vanilla_active_id', data[0].id);
+        state.view = 'status';
+        renderView();
+    }
 });
 
 // --- QR Generation for Kiosk ---
-let kioskQrInstance = null;
 function generateKioskQR() {
     const qrContainer = document.getElementById('kiosk-qr-code');
     qrContainer.innerHTML = '';
-
-    // Get base URL without hash or query params to ensure scan leads to Join page
     const url = window.location.origin + window.location.pathname;
 
     new QRCode(qrContainer, {
@@ -215,7 +236,7 @@ function renderStatusView() {
             <div class="header-section" style="margin-top: ${isCalled ? '1.5rem' : '0'}">
                 <p class="subtitle">Your Ticket Number</p>
                 <div class="ticket-hero">
-                    <h1>#${customer.ticketNumber}</h1>
+                    <h1>#${customer.ticket_number}</h1>
                 </div>
                 <h3 style="color: var(--primary)">${customer.name}</h3>
             </div>
@@ -248,7 +269,6 @@ function renderStatusView() {
         </div>
     `;
 
-    // Generate specific ticket QR
     new QRCode(document.getElementById('ticket-qr'), {
         text: customer.id,
         width: 140,
@@ -265,19 +285,17 @@ function renderStaffView() {
     const servedCount = state.queue.filter(c => c.status === 'completed').length;
     const currentServing = state.queue.find(c => c.status === 'called');
 
-    // Stats
     document.getElementById('stat-waiting').textContent = waitingList.length;
     document.getElementById('stat-served').textContent = servedCount;
     callNextBtn.disabled = waitingList.length === 0;
 
-    // Queue List
     queueList.innerHTML = waitingList.length === 0 ? '<p class="subtitle" style="text-align: center; padding: 2rem;">No customers waiting.</p>' : '';
     waitingList.forEach(c => {
         const card = document.createElement('div');
         card.className = 'glass-card customer-card animate-fade-in';
         card.innerHTML = `
             <div>
-                <span class="ticket-tag">#${c.ticketNumber}</span>
+                <span class="ticket-tag">#${c.ticket_number}</span>
                 <h4>${c.name}</h4>
                 <p class="subtitle" style="font-size: 0.75rem">${c.service}</p>
             </div>
@@ -288,16 +306,18 @@ function renderStaffView() {
         queueList.appendChild(card);
     });
 
-    // History List
     historyList.innerHTML = historyData.length === 0 ? '<p class="subtitle" style="text-align: center; padding: 2rem;">No history yet.</p>' : '';
     historyData.forEach(c => {
-        const waitTime = c.calledAt ? (c.calledAt - c.joinedAt) : (c.finishedAt - c.joinedAt);
+        const start = new Date(c.joined_at).getTime();
+        const end = c.called_at ? new Date(c.called_at).getTime() : new Date(c.finished_at).getTime();
+        const waitTime = end - start;
+
         const card = document.createElement('div');
         card.className = 'glass-card customer-card animate-fade-in';
         card.innerHTML = `
             <div style="flex: 1;">
                 <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-                    <span class="ticket-tag">#${c.ticketNumber}</span>
+                    <span class="ticket-tag">#${c.ticket_number}</span>
                     <span class="status-badge status-${c.status}">${c.status}</span>
                 </div>
                 <h4>${c.name}</h4>
@@ -311,12 +331,11 @@ function renderStaffView() {
         historyList.appendChild(card);
     });
 
-    // Now Serving
     if (currentServing) {
         servingContainer.innerHTML = `
             <div class="glass-card serving-card animate-fade-in">
                 <p style="color: var(--primary); font-weight: 700; font-size: 0.75rem; letter-spacing: 0.1em;">NOW SERVING</p>
-                <h1>#${currentServing.ticketNumber}</h1>
+                <h1>#${currentServing.ticket_number}</h1>
                 <h3>${currentServing.name}</h3>
                 <p class="subtitle">${currentServing.service}</p>
                 <button onclick="completeCustomer('${currentServing.id}')" class="btn-primary" style="width: 100%; margin-top: 2rem; background: var(--success); justify-content: center;">
@@ -335,33 +354,45 @@ function renderStaffView() {
 }
 
 // --- Actions ---
-function callNext() {
+async function callNext() {
     const next = state.queue.find(c => c.status === 'waiting');
     if (next) {
-        state.queue = state.queue.map(c =>
-            c.id === next.id ? { ...c, status: 'called', calledAt: Date.now() } :
-                (c.status === 'called' ? { ...c, status: 'completed', finishedAt: Date.now() } : c)
-        );
-        saveState();
-        renderView();
-        announceTicket(next.ticketNumber, next.name);
-        sendNotification(next);
+        // First, mark any currently 'called' customers as 'completed'
+        await supabase
+            .from('queue')
+            .update({ status: 'completed', finished_at: new Date().toISOString() })
+            .eq('status', 'called');
+
+        // Then, call the next one
+        await supabase
+            .from('queue')
+            .update({
+                status: 'called',
+                called_at: new Date().toISOString()
+            })
+            .eq('id', next.id);
     }
 }
 
 callNextBtn.addEventListener('click', callNext);
 
-function completeCustomer(id) {
-    state.queue = state.queue.map(c => c.id === id ? { ...c, status: 'completed', finishedAt: Date.now() } : c);
-    saveState();
-    renderView();
+async function completeCustomer(id) {
+    await supabase
+        .from('queue')
+        .update({ status: 'completed', finished_at: new Date().toISOString() })
+        .eq('id', id);
 }
 
-function cancelTicket(id) {
-    state.queue = state.queue.map(c => c.id === id ? { ...c, status: 'cancelled', finishedAt: Date.now() } : c);
-    if (state.activeCustomerId === id) state.activeCustomerId = null;
-    saveState();
-    renderView();
+async function cancelTicket(id) {
+    await supabase
+        .from('queue')
+        .update({ status: 'cancelled', finished_at: new Date().toISOString() })
+        .eq('id', id);
+
+    if (state.activeCustomerId === id) {
+        state.activeCustomerId = null;
+        localStorage.removeItem('vanilla_active_id');
+    }
 }
 
 // --- Audio API (Speech) ---
@@ -385,7 +416,7 @@ function requestNotificationPermission() {
 function sendNotification(customer) {
     if ('Notification' in window && Notification.permission === 'granted' && state.activeCustomerId === customer.id) {
         new Notification('Your Turn!', {
-            body: `Hello ${customer.name}, Ticket #${customer.ticketNumber} is now being served.`,
+            body: `Hello ${customer.name}, Ticket #${customer.ticket_number} is now being served.`,
             icon: 'https://cdn-icons-png.flaticon.com/512/3209/3209101.png'
         });
     }
