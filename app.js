@@ -213,7 +213,12 @@ function attachEventListeners() {
     }
 
     const callNextBtn = document.getElementById('call-next-btn');
-    if (callNextBtn) callNextBtn.onclick = callNext;
+    if (callNextBtn) {
+        callNextBtn.onclick = () => {
+            console.log('Call Next button clicked');
+            window.callNext();
+        };
+    }
 }
 
 // --- UI Rendering ---
@@ -320,7 +325,10 @@ function renderStaffView() {
 
     if (statWaiting) statWaiting.textContent = waitingList.length;
     if (statServed) statServed.textContent = servedCount;
-    if (callNextBtn) callNextBtn.disabled = waitingList.length === 0;
+    if (callNextBtn) {
+        console.log('Rendering staff view. Waiting count:', waitingList.length);
+        callNextBtn.disabled = waitingList.length === 0;
+    }
 
     const qListEl = document.getElementById('queue-list');
     const histListEl = document.getElementById('history-list');
@@ -383,14 +391,50 @@ function renderStaffView() {
 
 // --- Actions (Global exposure) ---
 window.callNext = async () => {
-    if (!supabaseClient) return;
+    console.log('Starting callNext operation...');
+    if (!supabaseClient) {
+        console.error('Supabase client not initialized');
+        alert("System not connected to database.");
+        return;
+    }
+
     const next = state.queue.find(c => c.status === 'waiting');
+    console.log('Next customer found:', next);
+
     if (next) {
-        await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('status', 'called');
-        await supabaseClient.from('queue').update({
-            status: 'called',
-            called_at: new Date().toISOString()
-        }).eq('id', next.id);
+        try {
+            // 1. Mark current serving as completed
+            const { error: error1 } = await supabaseClient
+                .from('queue')
+                .update({ status: 'completed', finished_at: new Date().toISOString() })
+                .eq('status', 'called');
+
+            if (error1) {
+                console.error('Error completing current customer:', error1);
+                throw error1;
+            }
+
+            // 2. Call the next customer
+            const { error: error2 } = await supabaseClient
+                .from('queue')
+                .update({
+                    status: 'called',
+                    called_at: new Date().toISOString()
+                })
+                .eq('id', next.id);
+
+            if (error2) {
+                console.error('Error calling next customer:', error2);
+                throw error2;
+            }
+
+            console.log('Successfully called next customer:', next.ticket_number);
+        } catch (err) {
+            console.error('Failed to call next customer:', err);
+            alert("Failed to call next customer. Check console for details.");
+        }
+    } else {
+        console.log('No customers waiting.');
     }
 };
 
