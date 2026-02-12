@@ -19,8 +19,7 @@ let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
     view: 'join', // join, status, staff, login, kiosk
-    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer',
-    counterName: sessionStorage.getItem('vanilla_counter_name') || ''
+    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer'
 };
 
 // --- Auth Management ---
@@ -87,7 +86,7 @@ function setupRealtimeSubscription() {
 
                 // Announce for Staff, Kiosk, or the specific Customer
                 if (isMyTurn || isStaff || isKiosk) {
-                    announceTicket(payload.new.ticket_number, payload.new.name, payload.new.counter_name);
+                    announceTicket(payload.new.ticket_number, payload.new.name);
                 }
 
                 // Only send desktop notification to the specific Customer
@@ -119,13 +118,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error("Data init failed:", e);
     }
 
-    // 5. Initialize Staff Inputs
-    if (state.view === 'staff') {
-        const counterInput = document.getElementById('staff-counter-name');
-        if (counterInput) counterInput.value = state.counterName;
-    }
-
-    // 6. Start Refresh Timer
+    // 5. Start Refresh Timer
     setInterval(() => {
         if (state.view === 'status' || state.view === 'staff') {
             renderView();
@@ -221,14 +214,6 @@ function attachEventListeners() {
 
     const callNextBtn = document.getElementById('call-next-btn');
     if (callNextBtn) callNextBtn.onclick = callNext;
-
-    const counterInput = document.getElementById('staff-counter-name');
-    if (counterInput) {
-        counterInput.oninput = (e) => {
-            state.counterName = e.target.value;
-            sessionStorage.setItem('vanilla_counter_name', state.counterName);
-        };
-    }
 }
 
 // --- UI Rendering ---
@@ -404,8 +389,7 @@ window.callNext = async () => {
         await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('status', 'called');
         await supabaseClient.from('queue').update({
             status: 'called',
-            called_at: new Date().toISOString(),
-            counter_name: state.counterName
+            called_at: new Date().toISOString()
         }).eq('id', next.id);
     }
 };
@@ -448,13 +432,12 @@ function generateKioskQR() {
     });
 }
 
-function announceTicket(number, name, counterName) {
+function announceTicket(number, name) {
     if ('speechSynthesis' in window) {
         // Cancel any ongoing speech to avoid stacking or delays
         window.speechSynthesis.cancel();
 
-        const counterPhrase = counterName ? `, please proceed to ${counterName}` : ', please proceed to the counter';
-        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}${counterPhrase}.`);
+        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}, please proceed to the counter.`);
         msg.rate = 0.9;
         window.speechSynthesis.speak(msg);
     }
