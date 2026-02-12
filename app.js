@@ -19,7 +19,8 @@ let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
     view: 'join', // join, status, staff, login, kiosk
-    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer'
+    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer',
+    counterName: sessionStorage.getItem('vanilla_counter_name') || ''
 };
 
 // --- Auth Management ---
@@ -86,7 +87,7 @@ function setupRealtimeSubscription() {
 
                 // Announce for Staff, Kiosk, or the specific Customer
                 if (isMyTurn || isStaff || isKiosk) {
-                    announceTicket(payload.new.ticket_number, payload.new.name);
+                    announceTicket(payload.new.ticket_number, payload.new.name, payload.new.counter_name);
                 }
 
                 // Only send desktop notification to the specific Customer
@@ -118,7 +119,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error("Data init failed:", e);
     }
 
-    // 5. Start Refresh Timer
+    // 5. Initialize Staff Inputs
+    if (state.view === 'staff') {
+        const counterInput = document.getElementById('staff-counter-name');
+        if (counterInput) counterInput.value = state.counterName;
+    }
+
+    // 6. Start Refresh Timer
     setInterval(() => {
         if (state.view === 'status' || state.view === 'staff') {
             renderView();
@@ -214,6 +221,14 @@ function attachEventListeners() {
 
     const callNextBtn = document.getElementById('call-next-btn');
     if (callNextBtn) callNextBtn.onclick = callNext;
+
+    const counterInput = document.getElementById('staff-counter-name');
+    if (counterInput) {
+        counterInput.oninput = (e) => {
+            state.counterName = e.target.value;
+            sessionStorage.setItem('vanilla_counter_name', state.counterName);
+        };
+    }
 }
 
 // --- UI Rendering ---
@@ -387,7 +402,11 @@ window.callNext = async () => {
     const next = state.queue.find(c => c.status === 'waiting');
     if (next) {
         await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('status', 'called');
-        await supabaseClient.from('queue').update({ status: 'called', called_at: new Date().toISOString() }).eq('id', next.id);
+        await supabaseClient.from('queue').update({
+            status: 'called',
+            called_at: new Date().toISOString(),
+            counter_name: state.counterName
+        }).eq('id', next.id);
     }
 };
 
@@ -429,12 +448,13 @@ function generateKioskQR() {
     });
 }
 
-function announceTicket(number, name) {
+function announceTicket(number, name, counterName) {
     if ('speechSynthesis' in window) {
         // Cancel any ongoing speech to avoid stacking or delays
         window.speechSynthesis.cancel();
 
-        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}, please proceed to the counter.`);
+        const counterPhrase = counterName ? `, please proceed to ${counterName}` : ', please proceed to the counter';
+        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}${counterPhrase}.`);
         msg.rate = 0.9;
         window.speechSynthesis.speak(msg);
     }
