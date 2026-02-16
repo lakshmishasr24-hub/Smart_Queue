@@ -222,6 +222,29 @@ main {
     border-color: var(--primary);
 }
 
+.service-selector {
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: white;
+    outline: none;
+    font-size: 0.875rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.service-selector:focus {
+    border-color: var(--primary);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.service-selector option {
+    background: var(--background);
+    color: var(--text-main);
+}
+
 .service-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
