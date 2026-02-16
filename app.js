@@ -86,7 +86,7 @@ function setupRealtimeSubscription() {
 
                 // Announce for Staff, Kiosk, or the specific Customer
                 if (isMyTurn || isStaff || isKiosk) {
-                    announceTicket(payload.new.ticket_number, payload.new.name);
+                    announceTicket(payload.new.ticket_number, payload.new.name, payload.new.service);
                 }
 
                 // Only send desktop notification to the specific Customer
@@ -476,12 +476,13 @@ function generateKioskQR() {
     });
 }
 
-function announceTicket(number, name) {
+function announceTicket(number, name, service) {
     if ('speechSynthesis' in window) {
         // Cancel any ongoing speech to avoid stacking or delays
         window.speechSynthesis.cancel();
 
-        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}, please proceed to the counter.`);
+        const serviceText = service ? `proceed to ${service} Counter` : 'proceed to the counter';
+        const msg = new SpeechSynthesisUtterance(`Ticket number ${number}, ${name}, please ${serviceText}.`);
         msg.rate = 0.9;
         window.speechSynthesis.speak(msg);
     }
