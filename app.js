@@ -19,7 +19,8 @@ let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
     view: 'join', // join, status, staff, login, kiosk
-    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer'
+    isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer',
+    staffSelectedService: 'All'
 };
 
 // --- Auth Management ---
@@ -219,6 +220,14 @@ function attachEventListeners() {
             window.callNext();
         };
     }
+
+    const serviceSelector = document.getElementById('staff-service-selector');
+    if (serviceSelector) {
+        serviceSelector.onchange = (e) => {
+            state.staffSelectedService = e.target.value;
+            renderView();
+        };
+    }
 }
 
 // --- UI Rendering ---
@@ -314,7 +323,13 @@ function renderStatusView() {
 }
 
 function renderStaffView() {
-    const waitingList = state.queue.filter(c => c.status === 'waiting');
+    let waitingList = state.queue.filter(c => c.status === 'waiting');
+
+    // Filter by selected service
+    if (state.staffSelectedService !== 'All') {
+        waitingList = waitingList.filter(c => c.service === state.staffSelectedService);
+    }
+
     const historyData = state.queue.filter(c => c.status === 'completed' || c.status === 'cancelled').reverse();
     const servedCount = state.queue.filter(c => c.status === 'completed').length;
     const currentServing = state.queue.find(c => c.status === 'called');
@@ -398,7 +413,11 @@ window.callNext = async () => {
         return;
     }
 
-    const next = state.queue.find(c => c.status === 'waiting');
+    const next = state.queue.find(c => {
+        const isWaiting = c.status === 'waiting';
+        const matchesService = state.staffSelectedService === 'All' || c.service === state.staffSelectedService;
+        return isWaiting && matchesService;
+    });
     console.log('Next customer found:', next);
 
     if (next) {
