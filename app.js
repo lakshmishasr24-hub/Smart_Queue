@@ -314,7 +314,21 @@ function renderStatusView() {
 
     const qrEl = document.getElementById('ticket-qr');
     if (qrEl) {
-        new QRCode(qrEl, { text: customer.id, width: 140, height: 140, colorDark: "#0f172a", colorLight: "#ffffff" });
+        try {
+            if (window.QRCode) {
+                new QRCode(qrEl, { text: customer.id, width: 140, height: 140, colorDark: "#0f172a", colorLight: "#ffffff" });
+            } else {
+                throw new Error("QRCode library not loaded");
+            }
+        } catch (e) {
+            console.warn("Falling back to web API for ticket QR:", e);
+            const qrImg = document.createElement('img');
+            qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(customer.id)}`;
+            qrImg.alt = "Ticket QR Code";
+            qrImg.style.width = "140px";
+            qrImg.style.height = "140px";
+            qrEl.appendChild(qrImg);
+        }
     }
 }
 
@@ -518,14 +532,30 @@ function generateKioskQR() {
     url.searchParams.set('mode', 'customer');
     url.searchParams.delete('view'); // Start at join view
 
-    new QRCode(qrContainer, {
-        text: url.toString(),
-        width: 300,
-        height: 300,
-        colorDark: "#0f172a",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.H
-    });
+    try {
+        if (window.QRCode) {
+            new QRCode(qrContainer, {
+                text: url.toString(),
+                width: 300,
+                height: 300,
+                colorDark: "#0f172a",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.H
+            });
+        } else {
+            throw new Error("QRCode library not loaded");
+        }
+    } catch (e) {
+        console.warn("Falling back to web API for QR code generation:", e);
+        const qrImg = document.createElement('img');
+        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url.toString())}`;
+        qrImg.alt = "Kiosk QR Code";
+        qrImg.style.width = "300px";
+        qrImg.style.height = "300px";
+        qrImg.style.display = "block";
+        qrImg.style.margin = "0 auto";
+        qrContainer.appendChild(qrImg);
+    }
 }
 
 function announceTicket(number, name, service) {
