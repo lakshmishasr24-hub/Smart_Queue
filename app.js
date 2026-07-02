@@ -1,5 +1,5 @@
 // --- State Management & Config ---
-let serverConfig = { localIp: 'localhost' };
+const FIREBASE_DB_URL = "https://smartqueue-dafe0-default-rtdb.firebaseio.com/queue.json";
 let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
@@ -67,16 +67,16 @@ function setView(viewName) {
     renderView();
 }
 
-// --- Data Logic (REST API based) ---
+// --- Data Logic (Firebase REST API based) ---
 async function fetchInitialData(triggerAnnouncements = true) {
     try {
-        const res = await fetch('/api/queue');
+        const res = await fetch(FIREBASE_DB_URL);
         if (res.ok) {
             const data = await res.json();
-            syncQueueState(data, triggerAnnouncements);
+            syncQueueState(data || [], triggerAnnouncements);
         }
     } catch (err) {
-        console.error('Error fetching initial data:', err);
+        console.error('Error fetching initial data from Firebase:', err);
     }
 }
 
@@ -92,21 +92,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 3. Request Permissions
     requestNotificationPermission();
 
-    // 4. Fetch Data & Config
-    try {
-        const configRes = await fetch('/api/config');
-        if (configRes.ok) {
-            serverConfig = await configRes.json();
-        }
-    } catch (e) {
-        console.error("Failed to load server config:", e);
-    }
-
+    // 4. Fetch Initial Data and Start Polling
     try {
         // Fetch queue but skip announcements for historical items on load
         await fetchInitialData(false);
         
-        // Start polling server every 2 seconds
+        // Start polling Firebase every 2 seconds
         setInterval(async () => {
             await fetchInitialData(true);
         }, 2000);
@@ -168,11 +159,13 @@ function attachEventListeners() {
                 joined_at: new Date().toISOString()
             };
 
+            const updatedQueue = [...state.queue, newTicket];
+
             try {
-                await fetch('/api/queue', {
-                    method: 'POST',
+                await fetch(FIREBASE_DB_URL, {
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newTicket)
+                    body: JSON.stringify(updatedQueue)
                 });
                 await fetchInitialData(false);
                 state.activeCustomerId = newTicket.id;
@@ -452,44 +445,51 @@ window.callNext = async () => {
     console.log('Next customer found:', next);
 
     // 1. Mark currently called customer as completed
-    const currentServing = state.queue.find(c => c.status === 'called');
-    if (currentServing) {
-        try {
-            await fetch('/api/queue', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: currentServing.id, status: 'completed', finished_at: new Date().toISOString() })
-            });
-        } catch (err) {
-            console.error('Error completing current customer:', err);
+    let updatedQueue = state.queue.map(c => {
+        if (c.status === 'called') {
+            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
         }
-    }
+        return c;
+    });
 
     // 2. Call the next customer
     if (next) {
-        try {
-            await fetch('/api/queue', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: next.id, status: 'called', called_at: new Date().toISOString() })
-            });
-            console.log('Successfully called next customer:', next.ticket_number);
-        } catch (err) {
-            console.error('Error calling next customer:', err);
-        }
+        updatedQueue = updatedQueue.map(c => {
+            if (c.id === next.id) {
+                return { ...c, status: 'called', called_at: new Date().toISOString() };
+            }
+            return c;
+        });
+        console.log('Successfully called next customer:', next.ticket_number);
     } else {
         console.log('No customers waiting.');
     }
 
-    await fetchInitialData(true);
+    try {
+        await fetch(FIREBASE_DB_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedQueue)
+        });
+        await fetchInitialData(true);
+    } catch (err) {
+        console.error('Error in callNext operations:', err);
+    }
 };
 
 window.completeCustomer = async (id) => {
+    const updatedQueue = state.queue.map(c => {
+        if (c.id === id) {
+            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
+        }
+        return c;
+    });
+
     try {
-        await fetch('/api/queue', {
+        await fetch(FIREBASE_DB_URL, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, status: 'completed', finished_at: new Date().toISOString() })
+            body: JSON.stringify(updatedQueue)
         });
         await fetchInitialData(true);
     } catch (err) {
@@ -498,11 +498,18 @@ window.completeCustomer = async (id) => {
 };
 
 window.cancelTicket = async (id) => {
+    const updatedQueue = state.queue.map(c => {
+        if (c.id === id) {
+            return { ...c, status: 'cancelled', finished_at: new Date().toISOString() };
+        }
+        return c;
+    });
+
     try {
-        await fetch('/api/queue', {
+        await fetch(FIREBASE_DB_URL, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, status: 'cancelled', finished_at: new Date().toISOString() })
+            body: JSON.stringify(updatedQueue)
         });
         await fetchInitialData(true);
     } catch (err) {
@@ -524,11 +531,8 @@ function generateKioskQR() {
     if (!qrContainer) return;
     qrContainer.innerHTML = '';
 
-    // Append mode=customer to the QR code URL and set host to computer's local Wi-Fi IP
+    // Append mode=customer to the QR code URL using the current host
     const url = new URL(window.location.href);
-    if (serverConfig && serverConfig.localIp && serverConfig.localIp !== 'localhost') {
-        url.hostname = serverConfig.localIp;
-    }
     url.searchParams.set('mode', 'customer');
     url.searchParams.delete('view'); // Start at join view
 
