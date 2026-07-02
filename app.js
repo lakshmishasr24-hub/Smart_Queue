@@ -1,19 +1,3 @@
-// --- Supabase Configuration ---
-const SUPABASE_URL = 'https://klpalrdvinfmvlsopapa.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtscGFscmR2aW5mbXZsc29wYXBhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3Nzk3NDEsImV4cCI6MjA4NjM1NTc0MX0.pMg4DnATZ0290feV2pN_TPYmhnp4Xc5-qB3aVQpY9N0';
-
-let supabaseClient;
-try {
-    // The library defines a global 'supabase' object with a 'createClient' method
-    if (window.supabase && window.supabase.createClient) {
-        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    } else {
-        console.error("Supabase library not found on window object.");
-    }
-} catch (e) {
-    console.error("Supabase fail to initialize:", e);
-}
-
 // --- State Management ---
 let state = {
     queue: [],
@@ -22,6 +6,34 @@ let state = {
     isCustomerMode: new URLSearchParams(window.location.search).get('mode') === 'customer',
     staffSelectedService: 'All'
 };
+
+// --- Local Storage Sync Helper ---
+function updateQueueState(newQueue, triggerAnnouncements = true) {
+    const oldQueue = state.queue;
+    state.queue = newQueue;
+    localStorage.setItem('smart_queue_data', JSON.stringify(newQueue));
+    
+    if (triggerAnnouncements) {
+        newQueue.forEach(item => {
+            const oldItem = oldQueue.find(o => o.id === item.id);
+            if (item.status === 'called' && (!oldItem || oldItem.status !== 'called')) {
+                const isMyTurn = item.id === state.activeCustomerId;
+                const isStaff = isAuthenticated();
+                const isKiosk = state.view === 'kiosk';
+
+                if (isMyTurn || isStaff || isKiosk) {
+                    announceTicket(item.ticket_number, item.name, item.service);
+                }
+
+                if (isMyTurn) {
+                    sendNotification(item);
+                }
+            }
+        });
+    }
+
+    renderView();
+}
 
 // --- Auth Management ---
 function isAuthenticated() {
@@ -55,49 +67,30 @@ function setView(viewName) {
     renderView();
 }
 
-// --- Supabase Data Logic ---
-async function fetchInitialData() {
-    if (!supabaseClient) return;
+// --- Data Logic (localStorage based) ---
+function fetchInitialData() {
     try {
-        const { data, error } = await supabaseClient
-            .from('queue')
-            .select('*')
-            .order('joined_at', { ascending: true });
-
-        if (error) throw error;
-        state.queue = data || [];
+        const raw = localStorage.getItem('smart_queue_data');
+        const data = raw ? JSON.parse(raw) : [];
+        state.queue = data;
     } catch (err) {
         console.error('Error fetching initial data:', err);
     }
 }
 
 function setupRealtimeSubscription() {
-    if (!supabaseClient) return;
-    supabaseClient
-        .channel('public:queue')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'queue' }, async (payload) => {
-            console.log('Realtime update:', payload);
-            await fetchInitialData();
-            renderView();
-
-            if (payload.eventType === 'UPDATE' && payload.new.status === 'called') {
-                const isMyTurn = payload.new.id === state.activeCustomerId;
-                const isStaff = isAuthenticated();
-                const isKiosk = state.view === 'kiosk';
-
-                // Announce for Staff, Kiosk, or the specific Customer
-                if (isMyTurn || isStaff || isKiosk) {
-                    announceTicket(payload.new.ticket_number, payload.new.name, payload.new.service);
-                }
-
-                // Only send desktop notification to the specific Customer
-                if (isMyTurn) {
-                    sendNotification(payload.new);
-                }
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'smart_queue_data') {
+            try {
+                const newQueue = JSON.parse(e.newValue || '[]');
+                updateQueueState(newQueue, true);
+            } catch (err) {
+                console.error('Error syncing storage event:', err);
             }
-        })
-        .subscribe();
+        }
+    });
 }
+
 
 // --- Main Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -164,36 +157,28 @@ function attachEventListeners() {
     // Forms
     const joinForm = document.getElementById('join-form');
     if (joinForm) {
-        joinForm.onsubmit = async (e) => {
+        joinForm.onsubmit = (e) => {
             e.preventDefault();
             const nameInput = document.getElementById('customer-name');
             const name = nameInput ? nameInput.value : "Unknown";
 
             const lastTicket = state.queue.reduce((max, item) => Math.max(max, item.ticket_number || 100), 100);
 
-            if (!supabaseClient) {
-                alert("Database disconnected. Check connection.");
-                return;
-            }
+            const newTicket = {
+                id: 'id_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                name,
+                service: window.selectedService,
+                ticket_number: lastTicket + 1,
+                status: 'waiting',
+                joined_at: new Date().toISOString()
+            };
 
-            const { data, error } = await supabaseClient
-                .from('queue')
-                .insert([{
-                    name,
-                    service: window.selectedService,
-                    ticket_number: lastTicket + 1,
-                    status: 'waiting',
-                    joined_at: new Date().toISOString()
-                }])
-                .select();
+            const updatedQueue = [...state.queue, newTicket];
+            updateQueueState(updatedQueue, true);
 
-            if (error) {
-                console.error('Join error:', error);
-            } else if (data && data[0]) {
-                state.activeCustomerId = data[0].id;
-                localStorage.setItem('vanilla_active_id', data[0].id);
-                setView('status');
-            }
+            state.activeCustomerId = newTicket.id;
+            localStorage.setItem('vanilla_active_id', newTicket.id);
+            setView('status');
         };
     }
 
@@ -405,13 +390,8 @@ function renderStaffView() {
 }
 
 // --- Actions (Global exposure) ---
-window.callNext = async () => {
+window.callNext = () => {
     console.log('Starting callNext operation...');
-    if (!supabaseClient) {
-        console.error('Supabase client not initialized');
-        alert("System not connected to database.");
-        return;
-    }
 
     const next = state.queue.find(c => {
         const isWaiting = c.status === 'waiting';
@@ -420,51 +400,49 @@ window.callNext = async () => {
     });
     console.log('Next customer found:', next);
 
-    if (next) {
-        try {
-            // 1. Mark current serving as completed
-            const { error: error1 } = await supabaseClient
-                .from('queue')
-                .update({ status: 'completed', finished_at: new Date().toISOString() })
-                .eq('status', 'called');
-
-            if (error1) {
-                console.error('Error completing current customer:', error1);
-                throw error1;
-            }
-
-            // 2. Call the next customer
-            const { error: error2 } = await supabaseClient
-                .from('queue')
-                .update({
-                    status: 'called',
-                    called_at: new Date().toISOString()
-                })
-                .eq('id', next.id);
-
-            if (error2) {
-                console.error('Error calling next customer:', error2);
-                throw error2;
-            }
-
-            console.log('Successfully called next customer:', next.ticket_number);
-        } catch (err) {
-            console.error('Failed to call next customer:', err);
-            alert("Failed to call next customer. Check console for details.");
+    // 1. Mark currently called customer as completed
+    let updatedQueue = state.queue.map(c => {
+        if (c.status === 'called') {
+            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
         }
+        return c;
+    });
+
+    // 2. Call the next customer
+    if (next) {
+        updatedQueue = updatedQueue.map(c => {
+            if (c.id === next.id) {
+                return { ...c, status: 'called', called_at: new Date().toISOString() };
+            }
+            return c;
+        });
+        console.log('Successfully called next customer:', next.ticket_number);
     } else {
         console.log('No customers waiting.');
     }
+
+    updateQueueState(updatedQueue, true);
 };
 
-window.completeCustomer = async (id) => {
-    if (!supabaseClient) return;
-    await supabaseClient.from('queue').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', id);
+window.completeCustomer = (id) => {
+    const updatedQueue = state.queue.map(c => {
+        if (c.id === id) {
+            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
+        }
+        return c;
+    });
+    updateQueueState(updatedQueue, true);
 };
 
-window.cancelTicket = async (id) => {
-    if (!supabaseClient) return;
-    await supabaseClient.from('queue').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', id);
+window.cancelTicket = (id) => {
+    const updatedQueue = state.queue.map(c => {
+        if (c.id === id) {
+            return { ...c, status: 'cancelled', finished_at: new Date().toISOString() };
+        }
+        return c;
+    });
+    updateQueueState(updatedQueue, true);
+
     if (state.activeCustomerId === id) {
         state.activeCustomerId = null;
         localStorage.removeItem('vanilla_active_id');
