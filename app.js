@@ -8,10 +8,9 @@ let state = {
 };
 
 // --- Local Storage Sync Helper ---
-function updateQueueState(newQueue, triggerAnnouncements = true) {
+function syncQueueState(newQueue, triggerAnnouncements = true) {
     const oldQueue = state.queue;
     state.queue = newQueue;
-    localStorage.setItem('smart_queue_data', JSON.stringify(newQueue));
     
     if (triggerAnnouncements) {
         newQueue.forEach(item => {
@@ -33,6 +32,11 @@ function updateQueueState(newQueue, triggerAnnouncements = true) {
     }
 
     renderView();
+}
+
+function updateQueueState(newQueue, triggerAnnouncements = true) {
+    localStorage.setItem('smart_queue_data', JSON.stringify(newQueue));
+    syncQueueState(newQueue, triggerAnnouncements);
 }
 
 // --- Auth Management ---
@@ -83,7 +87,7 @@ function setupRealtimeSubscription() {
         if (e.key === 'smart_queue_data') {
             try {
                 const newQueue = JSON.parse(e.newValue || '[]');
-                updateQueueState(newQueue, true);
+                syncQueueState(newQueue, true);
             } catch (err) {
                 console.error('Error syncing storage event:', err);
             }
@@ -93,7 +97,7 @@ function setupRealtimeSubscription() {
 
 
 // --- Main Initialization ---
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
     // 1. Attach Listeners first (Non-data dependent)
     attachEventListeners();
 
@@ -105,7 +109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 4. Fetch Data & Start Real-Time
     try {
-        await fetchInitialData();
+        fetchInitialData();
         setupRealtimeSubscription();
         renderView(); // Render again with data
     } catch (e) {
@@ -255,12 +259,21 @@ function renderStatusView() {
         return;
     }
 
-    const waitingQueue = state.queue.filter(c => c.status === 'waiting' || c.status === 'called');
-    const index = waitingQueue.findIndex(c => c.id === customer.id);
-    const position = index;
-
     const isCalled = customer.status === 'called';
     const isCompleted = customer.status === 'completed';
+
+    let positionText = "Served";
+    let estWaitText = "0m";
+
+    if (customer.status === 'waiting') {
+        const waitingQueue = state.queue.filter(c => c.status === 'waiting');
+        const index = waitingQueue.findIndex(c => c.id === customer.id);
+        positionText = index === 0 ? 'Next' : `${index} ahead`;
+        estWaitText = `${(index + 1) * 15}m`;
+    } else if (isCalled) {
+        positionText = "Active";
+        estWaitText = "Now";
+    }
 
     container.innerHTML = `
         <div class="glass-card status-card animate-fade-in">
@@ -277,12 +290,12 @@ function renderStatusView() {
                 <div class="glass-card mini-stat">
                     <i data-lucide="map-pin"></i>
                     <p style="font-size: 0.75rem; color: var(--text-muted)">Position</p>
-                    <h3>${position === 0 ? 'Next' : (position > 0 ? position + ' ahead' : 'Served')}</h3>
+                    <h3>${positionText}</h3>
                 </div>
                 <div class="glass-card mini-stat">
                     <i data-lucide="clock"></i>
                     <p style="font-size: 0.75rem; color: var(--text-muted)">Est. Wait</p>
-                    <h3>${position * 15}m</h3>
+                    <h3>${estWaitText}</h3>
                 </div>
             </div>
 
@@ -329,6 +342,32 @@ function renderStaffView() {
         console.log('Rendering staff view. Waiting count:', waitingList.length);
         callNextBtn.disabled = waitingList.length === 0;
     }
+
+    // Dynamic Average Wait Time
+    const completedTickets = state.queue.filter(c => c.status === 'completed');
+    let avgWaitText = "15m";
+    if (completedTickets.length > 0) {
+        let totalWaitMs = 0;
+        let validCount = 0;
+        completedTickets.forEach(c => {
+            const start = new Date(c.joined_at).getTime();
+            const end = c.called_at ? new Date(c.called_at).getTime() : (c.finished_at ? new Date(c.finished_at).getTime() : 0);
+            if (start && end && end >= start) {
+                totalWaitMs += (end - start);
+                validCount++;
+            }
+        });
+        if (validCount > 0) {
+            const avgMs = totalWaitMs / validCount;
+            if (avgMs < 60000) {
+                avgWaitText = "< 1m";
+            } else {
+                avgWaitText = `${Math.round(avgMs / 60000)}m`;
+            }
+        }
+    }
+    const statAvg = document.getElementById('stat-avg');
+    if (statAvg) statAvg.textContent = avgWaitText;
 
     const qListEl = document.getElementById('queue-list');
     const histListEl = document.getElementById('history-list');
