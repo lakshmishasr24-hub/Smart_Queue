@@ -1,4 +1,5 @@
-// --- State Management ---
+// --- State Management & Config ---
+let serverConfig = { localIp: 'localhost' };
 let state = {
     queue: [],
     activeCustomerId: localStorage.getItem('vanilla_active_id') || null,
@@ -7,7 +8,7 @@ let state = {
     staffSelectedService: 'All'
 };
 
-// --- Local Storage Sync Helper ---
+// --- Queue Synchronization Sync Helper ---
 function syncQueueState(newQueue, triggerAnnouncements = true) {
     const oldQueue = state.queue;
     state.queue = newQueue;
@@ -32,11 +33,6 @@ function syncQueueState(newQueue, triggerAnnouncements = true) {
     }
 
     renderView();
-}
-
-function updateQueueState(newQueue, triggerAnnouncements = true) {
-    localStorage.setItem('smart_queue_data', JSON.stringify(newQueue));
-    syncQueueState(newQueue, triggerAnnouncements);
 }
 
 // --- Auth Management ---
@@ -71,33 +67,22 @@ function setView(viewName) {
     renderView();
 }
 
-// --- Data Logic (localStorage based) ---
-function fetchInitialData() {
+// --- Data Logic (REST API based) ---
+async function fetchInitialData(triggerAnnouncements = true) {
     try {
-        const raw = localStorage.getItem('smart_queue_data');
-        const data = raw ? JSON.parse(raw) : [];
-        state.queue = data;
+        const res = await fetch('/api/queue');
+        if (res.ok) {
+            const data = await res.json();
+            syncQueueState(data, triggerAnnouncements);
+        }
     } catch (err) {
         console.error('Error fetching initial data:', err);
     }
 }
 
-function setupRealtimeSubscription() {
-    window.addEventListener('storage', (e) => {
-        if (e.key === 'smart_queue_data') {
-            try {
-                const newQueue = JSON.parse(e.newValue || '[]');
-                syncQueueState(newQueue, true);
-            } catch (err) {
-                console.error('Error syncing storage event:', err);
-            }
-        }
-    });
-}
-
 
 // --- Main Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // 1. Attach Listeners first (Non-data dependent)
     attachEventListeners();
 
@@ -107,21 +92,27 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Request Permissions
     requestNotificationPermission();
 
-    // 4. Fetch Data & Start Real-Time
+    // 4. Fetch Data & Config
     try {
-        fetchInitialData();
-        setupRealtimeSubscription();
-        renderView(); // Render again with data
+        const configRes = await fetch('/api/config');
+        if (configRes.ok) {
+            serverConfig = await configRes.json();
+        }
+    } catch (e) {
+        console.error("Failed to load server config:", e);
+    }
+
+    try {
+        // Fetch queue but skip announcements for historical items on load
+        await fetchInitialData(false);
+        
+        // Start polling server every 2 seconds
+        setInterval(async () => {
+            await fetchInitialData(true);
+        }, 2000);
     } catch (e) {
         console.error("Data init failed:", e);
     }
-
-    // 5. Start Refresh Timer
-    setInterval(() => {
-        if (state.view === 'status' || state.view === 'staff') {
-            renderView();
-        }
-    }, 30000);
 });
 
 function attachEventListeners() {
@@ -161,7 +152,7 @@ function attachEventListeners() {
     // Forms
     const joinForm = document.getElementById('join-form');
     if (joinForm) {
-        joinForm.onsubmit = (e) => {
+        joinForm.onsubmit = async (e) => {
             e.preventDefault();
             const nameInput = document.getElementById('customer-name');
             const name = nameInput ? nameInput.value : "Unknown";
@@ -177,12 +168,19 @@ function attachEventListeners() {
                 joined_at: new Date().toISOString()
             };
 
-            const updatedQueue = [...state.queue, newTicket];
-            updateQueueState(updatedQueue, true);
-
-            state.activeCustomerId = newTicket.id;
-            localStorage.setItem('vanilla_active_id', newTicket.id);
-            setView('status');
+            try {
+                await fetch('/api/queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newTicket)
+                });
+                await fetchInitialData(false);
+                state.activeCustomerId = newTicket.id;
+                localStorage.setItem('vanilla_active_id', newTicket.id);
+                setView('status');
+            } catch (err) {
+                console.error('Error joining queue:', err);
+            }
         };
     }
 
@@ -429,7 +427,7 @@ function renderStaffView() {
 }
 
 // --- Actions (Global exposure) ---
-window.callNext = () => {
+window.callNext = async () => {
     console.log('Starting callNext operation...');
 
     const next = state.queue.find(c => {
@@ -440,47 +438,62 @@ window.callNext = () => {
     console.log('Next customer found:', next);
 
     // 1. Mark currently called customer as completed
-    let updatedQueue = state.queue.map(c => {
-        if (c.status === 'called') {
-            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
+    const currentServing = state.queue.find(c => c.status === 'called');
+    if (currentServing) {
+        try {
+            await fetch('/api/queue', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: currentServing.id, status: 'completed', finished_at: new Date().toISOString() })
+            });
+        } catch (err) {
+            console.error('Error completing current customer:', err);
         }
-        return c;
-    });
+    }
 
     // 2. Call the next customer
     if (next) {
-        updatedQueue = updatedQueue.map(c => {
-            if (c.id === next.id) {
-                return { ...c, status: 'called', called_at: new Date().toISOString() };
-            }
-            return c;
-        });
-        console.log('Successfully called next customer:', next.ticket_number);
+        try {
+            await fetch('/api/queue', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: next.id, status: 'called', called_at: new Date().toISOString() })
+            });
+            console.log('Successfully called next customer:', next.ticket_number);
+        } catch (err) {
+            console.error('Error calling next customer:', err);
+        }
     } else {
         console.log('No customers waiting.');
     }
 
-    updateQueueState(updatedQueue, true);
+    await fetchInitialData(true);
 };
 
-window.completeCustomer = (id) => {
-    const updatedQueue = state.queue.map(c => {
-        if (c.id === id) {
-            return { ...c, status: 'completed', finished_at: new Date().toISOString() };
-        }
-        return c;
-    });
-    updateQueueState(updatedQueue, true);
+window.completeCustomer = async (id) => {
+    try {
+        await fetch('/api/queue', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, status: 'completed', finished_at: new Date().toISOString() })
+        });
+        await fetchInitialData(true);
+    } catch (err) {
+        console.error('Error completing customer:', err);
+    }
 };
 
-window.cancelTicket = (id) => {
-    const updatedQueue = state.queue.map(c => {
-        if (c.id === id) {
-            return { ...c, status: 'cancelled', finished_at: new Date().toISOString() };
-        }
-        return c;
-    });
-    updateQueueState(updatedQueue, true);
+window.cancelTicket = async (id) => {
+    try {
+        await fetch('/api/queue', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, status: 'cancelled', finished_at: new Date().toISOString() })
+        });
+        await fetchInitialData(true);
+    } catch (err) {
+        console.error('Error cancelling ticket:', err);
+    }
 
     if (state.activeCustomerId === id) {
         state.activeCustomerId = null;
@@ -497,8 +510,11 @@ function generateKioskQR() {
     if (!qrContainer) return;
     qrContainer.innerHTML = '';
 
-    // Append mode=customer to the QR code URL so scanned devices hide staff buttons
+    // Append mode=customer to the QR code URL and set host to computer's local Wi-Fi IP
     const url = new URL(window.location.href);
+    if (serverConfig && serverConfig.localIp && serverConfig.localIp !== 'localhost') {
+        url.hostname = serverConfig.localIp;
+    }
     url.searchParams.set('mode', 'customer');
     url.searchParams.delete('view'); // Start at join view
 
